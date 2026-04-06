@@ -221,7 +221,8 @@ Please:
 1. Summarise a paper and it's core concepts.
 2. Explain where this paper could be applied.
 3. Describe a quick prototype that could be built utilising this paper.
-4. Explain the core benefits of the paper."""
+4. Explain the core benefits of the paper.
+5. Try and keep it simple and brief, you are not trying to regurgate the whole paper."""
         }]}],
         output_config=output_config
     )
