@@ -7,16 +7,18 @@ downloads top 5 PDFs, and sends a digest via Telegram.
 Deployed on Cloud Run, triggered daily by Cloud Scheduler.
 """
 
+import base64
 import os
 import logging
 import asyncio
 from datetime import datetime
+import time
 
 import httpx
 import xmltodict
 import anthropic
 import requests
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 # --- Configuration ---
 ARXIV_CATEGORIES = os.getenv(
@@ -29,7 +31,8 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20250514")
+CLAUDE_MODEL_RANKING = os.getenv("CLAUDE_MODEL_RANKING", "claude-sonnet-4-5-20250514")
+CLAUDE_MODEL_SUMMARY = os.getenv("CLAUDE_MODEL_SUMMARY", "claude-sonnet-4-5-20250514")
 
 USER_INTERESTS = os.getenv("USER_INTERESTS", """
 - LLM-powered tools and applications (RAG, agents, tool use)
@@ -56,11 +59,15 @@ class Paper(BaseModel):
 class PaperSelection(BaseModel):
     selection:list[int] = Field(description="List of indicies of the selected papers.")
 
+    model_config = ConfigDict(extra='forbid')
+
 class PaperSummary(BaseModel):
     summary:str = Field(description="Summary of the key findings of this paper.")
     application:str = Field(description="Summary of where this paper can be applied.")
     prototype:str = Field(description="A quick prototype that can be done using the findings of this paper. Assume some existing RAG based agents already exist.")
     benefits:str = Field(description="A description of the benfits this paper provides.")
+
+    model_config = ConfigDict(extra='forbid')
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -134,7 +141,7 @@ def rank_papers_with_claude(
     paper_list = ""
     for i, p in enumerate(papers):
         authors_str = ", ".join(p.authors[:3])
-        if len(p["authors"]) > 3:
+        if len(p.authors) > 3:
             authors_str += " et al."
         paper_list += (
             f"\n[{i}] {p.title}\n"
@@ -161,11 +168,12 @@ Please:
     logger.info("Sending papers to Claude for ranking...")
     output_config = anthropic.types.OutputConfigParam(
         format = anthropic.types.JSONOutputFormatParam(
-            schema=PaperSelection.model_json_schema()
+            schema=PaperSelection.model_json_schema(),
+            type='json_schema'
         )
     )
     message = client.messages.create(
-        model=CLAUDE_MODEL,
+        model=CLAUDE_MODEL_RANKING,
         max_tokens=2000,
         messages=[{"role": "user", "content": prompt}],
         output_config=output_config
@@ -182,18 +190,20 @@ Please:
     return selected_papers
 
 def process_paper(paper:Paper)->PaperSummary:
+    time.sleep(65)
     reponse = requests.get(paper.get_pdf_url())
-    paper = reponse.content
+    paper = base64.b64encode(reponse.content).decode("utf-8")
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-    logger.info("Sending papers to Claude for ranking...")
+    logger.info("Sending paper to Claude for summarisation...")
     output_config = anthropic.types.OutputConfigParam(
         format = anthropic.types.JSONOutputFormatParam(
-            schema=PaperSummary.model_json_schema()
+            schema=PaperSummary.model_json_schema(),
+            type='json_schema'
         )
     )
     message = client.messages.create(
-        model=CLAUDE_MODEL,
+        model=CLAUDE_MODEL_SUMMARY,
         max_tokens=2000,
         messages=[{"role": "user", "content": [{
             "type" : "document",
@@ -215,8 +225,8 @@ Please:
         }]}],
         output_config=output_config
     )
-
-    summary_response = PaperSelection.model_validate_json(message.content[0].text)
+    logger.info('Recevieved Claude Summary')
+    summary_response = PaperSummary.model_validate_json(message.content[0].text)
     return summary_response
 
 # --- Telegram ---
@@ -316,8 +326,8 @@ def _escape_md(text: str) -> str:
 
 
 def main():
-    all_papers = fetch_arxiv_papers(ARXIV_CATEGORIES)
-    top_papers = rank_papers_with_claude(all_papers)
+    all_papers = fetch_arxiv_papers(ARXIV_CATEGORIES, ARXIV_MAX_RESULTS)
+    top_papers = rank_papers_with_claude(all_papers, TOP_N_PAPERS)
     paper_summaries = [(paper, process_paper(paper)) for paper in top_papers]
     final_message = format_telegram_digest(paper_summaries)
     success = asyncio.run(send_telegram_message(final_message))
