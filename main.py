@@ -72,8 +72,6 @@ class PaperSummary(BaseModel):
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
-# --- arXiv API ---
 def fetch_arxiv_papers(
     categories: list[str],
     max_results: int = 500,
@@ -110,7 +108,6 @@ def fetch_arxiv_papers(
             authors_raw = [authors_raw]
         authors = [a.get("name", "") for a in authors_raw]
 
-        # Extract arXiv ID from the entry id URL
         arxiv_id = entry.get("id", "").split("/abs/")[-1]
         abstract:str = entry.get("summary", "").replace("\n", " ").strip()
         if not abstract:
@@ -127,8 +124,6 @@ def fetch_arxiv_papers(
     logger.info(f"Fetched {len(papers)} papers from arXiv")
     return papers
 
-
-# --- Claude Ranking ---
 def rank_papers_with_claude(
     papers: list[Paper],
     top_n: int = 5,
@@ -226,11 +221,10 @@ Please:
         }]}],
         output_config=output_config
     )
-    logger.info('Recevieved Claude Summary')
+    logger.info('Recevieved Claude Summary.')
     summary_response = PaperSummary.model_validate_json(message.content[0].text)
     return summary_response
 
-# --- Telegram ---
 async def send_telegram_message(text: str, parse_mode: str = "Markdown") -> bool:
     """Send a message via Telegram bot."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -242,7 +236,6 @@ async def send_telegram_message(text: str, parse_mode: str = "Markdown") -> bool
     # Telegram has a 4096 char limit per message, split if needed
     chunks = []
     if len(text) > 4000:
-        # Split on double newlines to keep sections together
         sections = text.split("\n\n")
         current_chunk = ""
         for section in sections:
@@ -268,7 +261,6 @@ async def send_telegram_message(text: str, parse_mode: str = "Markdown") -> bool
                 resp = await client.post(url, json=payload)
                 resp.raise_for_status()
             except httpx.HTTPStatusError as e:
-                # If Markdown fails, retry without parse_mode
                 logger.warning(f"Telegram send failed with Markdown, retrying as plain text: {e}")
                 payload["parse_mode"] = ""
                 resp = await client.post(url, json=payload)
