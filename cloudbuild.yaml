@@ -1,0 +1,49 @@
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/arxiv-digest:$SHORT_SHA'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/arxiv-digest:latest'
+      - '.'
+
+  # Push the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '--all-tags'
+      - 'gcr.io/$PROJECT_ID/arxiv-digest'
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'arxiv-digest'
+      - '--image=gcr.io/$PROJECT_ID/arxiv-digest:$SHORT_SHA'
+      - '--region=europe-west2'
+      - '--platform=managed'
+      - '--no-allow-unauthenticated'
+      - '--memory=512Mi'
+      - '--timeout=120'
+      - '--max-instances=1'
+      - '--set-secrets=ANTHROPIC_API_KEY=anthropic-api-key:latest,TELEGRAM_BOT_TOKEN=bot_key:latest,TELEGRAM_CHAT_ID=telegram-chat-id:latest'
+      - '--set-env-vars=ARXIV_CATEGORIES=cs.AI,cs.LG,cs.CL,cs.SE,cs.IR,ARXIV_MAX_RESULTS=100,TOP_N_PAPERS=5,CLAUDE_MODEL=claude-sonnet-4-5-20250514'
+      - '--project=$PROJECT_ID'
+
+availableSecrets:
+  secretManager:
+    - versionName: projects/670696837687/secrets/bot_key/versions/latest
+      env: 'TELEGRAM_BOT_TOKEN'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+substitutions:
+  _REGION: europe-west2
+
+images:
+  - 'gcr.io/$PROJECT_ID/arxiv-digest'
