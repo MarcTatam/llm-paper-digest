@@ -62,10 +62,10 @@ class PaperSelection(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
 class PaperSummary(BaseModel):
-    summary:str = Field(description="Summary of the key findings of this paper.")
-    application:str = Field(description="Summary of where this paper can be applied.")
-    prototype:str = Field(description="A quick prototype that can be done using the findings of this paper. Assume some existing RAG based agents already exist.")
-    benefits:str = Field(description="A description of the benfits this paper provides.")
+    summary:str = Field(description="2-3 sentence summary of what this paper does and its key finding. Be direct, no filler.")
+    application:str = Field(description="1-2 sentences on where this could be applied in production AI systems.")
+    prototype:str = Field(description="1-2 sentences describing a quick prototype using these findings. Assume existing RAG/agent infrastructure.")
+    impact:str = Field(description="1 sentence on the practical impact — what changes if this works at scale?")
 
     model_config = ConfigDict(extra='forbid')
 
@@ -210,14 +210,15 @@ def process_paper(paper:Paper)->PaperSummary:
         },
         {
             "type" : "text",
-            "text" : """You are an AI research digest assistant. Your job is to summarise the attached paper for the digest.
+            "text" : """Summarise this paper for a morning digest read by an AI engineer. Be concise — each field should be a few sentences at most.
 
-Please:
-1. Summarise a paper and it's core concepts.
-2. Explain where this paper could be applied.
-3. Describe a quick prototype that could be built utilising this paper.
-4. Explain the core benefits of the paper.
-5. Try and keep it simple and brief, you are not trying to regurgate the whole paper."""
+Rules:
+- No filler phrases like "This paper presents" or "The authors propose" — just say what it does.
+- Assume the reader understands transformers, RAG, RL, and standard ML concepts.
+- Focus on what's novel, not background.
+- For the prototype, be specific and actionable, not vague.
+- For impact, think: what changes in production AI systems if this works?
+- Total response should be under 250 words."""
         }]}],
         output_config=output_config
     )
@@ -226,14 +227,13 @@ Please:
     return summary_response
 
 async def send_telegram_message(text: str, parse_mode: str = "Markdown") -> bool:
-    """Send a message via Telegram bot."""
+    """Send a single message via Telegram bot, splitting if over 4096 chars."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         logger.error("Telegram credentials not configured")
         return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
-    # Telegram has a 4096 char limit per message, split if needed
     chunks = []
     if len(text) > 4000:
         sections = text.split("\n\n")
@@ -265,26 +265,41 @@ async def send_telegram_message(text: str, parse_mode: str = "Markdown") -> bool
                 payload["parse_mode"] = ""
                 resp = await client.post(url, json=payload)
                 resp.raise_for_status()
-            await asyncio.sleep(0.5)  # Rate limiting between chunks
+            await asyncio.sleep(0.5)
 
-    logger.info(f"Sent digest via Telegram ({len(chunks)} message(s))")
     return True
 
 
-def format_telegram_digest(paper_summaries: list[tuple[Paper, PaperSummary]]) -> str:
-    """Format paper summaries into a clean Telegram digest message."""
-    date_str = datetime.utcnow().strftime("%A, %d %B %Y")
-    header = f"📚 *arXiv Daily Digest*\n_{date_str}_\n{len(paper_summaries)} papers selected for you\n"
+async def send_digest(messages: list[str]) -> bool:
+    """Send a list of Telegram messages sequentially."""
+    for i, message in enumerate(messages):
+        success = await send_telegram_message(message)
+        if not success:
+            logger.error(f"Failed to send message {i + 1}/{len(messages)}")
+            return False
+    logger.info(f"Sent digest via Telegram ({len(messages)} message(s))")
+    return True
 
-    sections = []
+
+def format_telegram_digest(paper_summaries: list[tuple[Paper, PaperSummary]]) -> list[str]:
+    """Format paper summaries into separate Telegram messages — one header + one per paper."""
+    date_str = datetime.utcnow().strftime("%A, %d %B %Y")
+    header = (
+        f"📚 *arXiv Daily Digest*\n"
+        f"_{date_str}_\n"
+        f"\n"
+        f"{len(paper_summaries)} papers selected for you today."
+    )
+
+    messages = [header]
+
     for i, (paper, summary) in enumerate(paper_summaries, 1):
         authors_str = ", ".join(paper.authors[:3])
         if len(paper.authors) > 3:
             authors_str += " et al."
 
-        section = (
-            f"{'─' * 28}\n"
-            f"*{i}. {_escape_md(paper.title)}*\n"
+        message = (
+            f"*{i}/{len(paper_summaries)}  {_escape_md(paper.title)}*\n"
             f"_{_escape_md(authors_str)}_\n"
             f"\n"
             f"📝 *Summary*\n"
@@ -296,14 +311,14 @@ def format_telegram_digest(paper_summaries: list[tuple[Paper, PaperSummary]]) ->
             f"⚡ *Quick Prototype*\n"
             f"{_escape_md(summary.prototype)}\n"
             f"\n"
-            f"✅ *Benefits*\n"
-            f"{_escape_md(summary.benefits)}\n"
+            f"💥 *Impact*\n"
+            f"{_escape_md(summary.impact)}\n"
             f"\n"
             f"[Read Paper]({paper.get_abs_url()}) · [PDF]({paper.get_pdf_url()})"
         )
-        sections.append(section)
+        messages.append(message)
 
-    return header + "\n\n".join(sections)
+    return messages
 
 
 def _escape_md(text: str) -> str:
@@ -322,9 +337,9 @@ def main():
     all_papers = fetch_arxiv_papers(ARXIV_CATEGORIES, ARXIV_MAX_RESULTS)
     top_papers = rank_papers_with_claude(all_papers, TOP_N_PAPERS)
     paper_summaries = [(paper, process_paper(paper)) for paper in top_papers]
-    final_message = format_telegram_digest(paper_summaries)
-    success = asyncio.run(send_telegram_message(final_message))
-    logger.info(f"Message sent: {success}")
+    messages = format_telegram_digest(paper_summaries)
+    success = asyncio.run(send_digest(messages))
+    logger.info(f"Digest sent: {success}")
 
 if __name__ == "__main__":
     main()
