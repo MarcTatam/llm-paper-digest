@@ -26,6 +26,10 @@ Each morning you get a Telegram message with 5 papers, each containing:
 - **Benefits** — why this paper matters
 - **Links** — direct links to the abstract and PDF
 
+<p align="center">
+  <img src="docs/sample-digest.png" alt="Sample Telegram digest showing a paper summary" width="400"/>
+</p>
+
 ## Setup
 
 ### Prerequisites
