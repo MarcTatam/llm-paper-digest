@@ -1,6 +1,6 @@
 # 📚 LLM Paper Digest
 
-An automated daily pipeline that fetches new arXiv papers, uses Claude to rank them by relevance to your interests, summarises the top papers from their full PDFs, and delivers a digest to Telegram.
+I wanted to stay current with ML research without spending an hour a day triaging arXiv. Existing tools either sent me too much (daily category digests with 200 papers) or too little (curated newsletters that don't match my specific interests). This is the compromise: five papers a day, ranked against my own interest profile, summarised from the full PDF rather than just the abstract.
 
 Runs as a Cloud Run Job on GCP, triggered by Cloud Scheduler.
 
@@ -27,7 +27,7 @@ Each morning you get a Telegram message with 5 papers, each containing:
 - **Links** — direct links to the abstract and PDF
 
 <p align="center">
-  <img src="docs/sample-digest.png" alt="Sample Telegram digest showing a paper summary" width="400"/>
+  <img src="docs/sample-image.png" alt="Sample Telegram digest showing a paper summary" width="400"/>
 </p>
 
 ## Setup
