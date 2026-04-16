@@ -142,8 +142,7 @@ Edit the `USER_INTERESTS` variable in `main.py` to tune what papers Claude selec
 ├── infrastructure/
 │   ├── main.tf                   # All GCP resources
 │   ├── variables.tf              # Input variables
-│   ├── outputs.tf                # Useful outputs (SA emails, job names)
-│   └── terraform.tfvars.example  # Example variable values
+│   └── outputs.tf                # Useful outputs (SA emails, job names)
 ├── docs/
 │   └── sample-image.png          # Sample digest screenshot
 ├── cloudbuild.yaml               # CI/CD: build, push, deploy
