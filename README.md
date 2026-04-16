@@ -110,8 +110,6 @@ Secrets are managed as Terraform resources. Their secret values should be added 
 | `top_n_papers` | `5` | Papers to include in the digest |
 | `claude_model_ranking` | `claude-sonnet-4-5-20250514` | Model for ranking |
 | `claude_model_summary` | `claude-sonnet-4-5-20250514` | Model for summarisation |
-| `schedule` | `0 8 * * 1-5` | Cron schedule |
-| `schedule_timezone` | `Europe/London` | Scheduler timezone |
 
 ## Configuration
 
