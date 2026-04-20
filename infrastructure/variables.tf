@@ -43,3 +43,37 @@ variable "image" {
   type = string
   description = "Name of the image to use."
 }
+
+variable "profile_image" {
+  type        = string
+  description = "Name of the profile job image to use."
+}
+
+variable "papers_collection" {
+  type        = string
+  default     = "sent_papers"
+  description = "Firestore collection for sent papers."
+}
+
+variable "profiles_collection" {
+  type        = string
+  default     = "profiles"
+  description = "Firestore collection for profiles."
+}
+
+variable "unvoted_ttl_days" {
+  type        = number
+  default     = 14
+  description = "TTL in days for papers with no votes."
+}
+
+variable "claude_model_profile" {
+  type        = string
+  description = "Claude model to use for profile generation."
+}
+
+variable "vote_threshold" {
+  type        = number
+  default     = 10
+  description = "Total votes required before the webhook triggers profile regeneration."
+}
