@@ -1,0 +1,10 @@
+[project]
+name = "profile-generation-job"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "google-cloud-firestore>=2.27.0",
+    "pydantic>=2.13.3",
+]
