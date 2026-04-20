@@ -18,7 +18,9 @@ import httpx
 import xmltodict
 import anthropic
 import requests
+from google.cloud import firestore
 from pydantic import BaseModel, Field, ConfigDict
+
 
 # --- Configuration ---
 ARXIV_CATEGORIES = os.getenv(
@@ -33,6 +35,8 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 CLAUDE_MODEL_RANKING = os.getenv("CLAUDE_MODEL_RANKING", "claude-sonnet-4-5-20250514")
 CLAUDE_MODEL_SUMMARY = os.getenv("CLAUDE_MODEL_SUMMARY", "claude-sonnet-4-5-20250514")
+
+FIRESTORE_COLLECTION = os.getenv("FIRESTORE_COLLECTION", "sent_papers")
 
 USER_INTERESTS = os.getenv("USER_INTERESTS", """
 - LLM-powered tools and applications (RAG, agents, tool use)
@@ -49,6 +53,7 @@ class Paper(BaseModel):
     arxiv_id:str
     title:str
     abstract:str
+    categories: list[str] = []
 
     def get_pdf_url(self):
         return f"https://arxiv.org/pdf/{self.arxiv_id}.pdf"
@@ -108,6 +113,11 @@ def fetch_arxiv_papers(
             authors_raw = [authors_raw]
         authors = [a.get("name", "") for a in authors_raw]
 
+        categories_raw = entry.get("category", [])
+        if isinstance(categories_raw, dict):
+            categories_raw = [categories_raw]
+        categories = [c.get("@term", "") for c in categories_raw if c.get("@term")]
+
         arxiv_id = entry.get("id", "").split("/abs/")[-1]
         abstract:str = entry.get("summary", "").replace("\n", " ").strip()
         if not abstract:
@@ -118,7 +128,8 @@ def fetch_arxiv_papers(
             arxiv_id=arxiv_id,
             authors=authors,
             title=title,
-            abstract=abstract
+            abstract=abstract,
+            categories=categories
         ))
 
     logger.info(f"Fetched {len(papers)} papers from arXiv")
@@ -226,7 +237,7 @@ Rules:
     summary_response = PaperSummary.model_validate_json(message.content[0].text)
     return summary_response
 
-async def send_telegram_message(text: str, parse_mode: str = "Markdown") -> bool:
+async def send_telegram_message(text: str, parse_mode: str = "Markdown") -> int | None:
     """Send a single message via Telegram bot, splitting if over 4096 chars."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         logger.error("Telegram credentials not configured")
@@ -249,6 +260,7 @@ async def send_telegram_message(text: str, parse_mode: str = "Markdown") -> bool
     else:
         chunks = [text]
 
+    first_message_id: int | None = None
     async with httpx.AsyncClient(timeout=15) as client:
         for chunk in chunks:
             payload = {
@@ -265,25 +277,55 @@ async def send_telegram_message(text: str, parse_mode: str = "Markdown") -> bool
                 payload["parse_mode"] = ""
                 resp = await client.post(url, json=payload)
                 resp.raise_for_status()
+            if first_message_id is None:
+                first_message_id = resp.json().get("result", {}).get("message_id")
             await asyncio.sleep(0.5)
 
-    return True
+    return first_message_id
 
 
-async def send_digest(messages: list[str]) -> bool:
+async def send_digest(messages: list[str]) -> list[int | None]:
     """Send a list of Telegram messages sequentially."""
+    message_ids: list[int | None] = []
     for i, message in enumerate(messages):
-        success = await send_telegram_message(message)
-        if not success:
+        msg_id = await send_telegram_message(message)
+        if msg_id is None:
             logger.error(f"Failed to send message {i + 1}/{len(messages)}")
-            return False
+        # First message is header, we don't care about it's ID.
+        if i > 0:
+            message_ids.append(msg_id)
     logger.info(f"Sent digest via Telegram ({len(messages)} message(s))")
-    return True
+    return message_ids
+
+def save_paper_to_firestore(
+    paper: Paper,
+    telegram_message_id: int,
+    db: firestore.Client | None = None,
+) -> None:
+    """Persist a sent paper to Firestore for later feedback tracking.
+
+    Uses arxiv_id as the document ID so writes are idempotent.
+    """
+    if db is None:
+        db = firestore.Client()
+
+    doc_ref = db.collection(FIRESTORE_COLLECTION).document(paper.arxiv_id)
+    doc_ref.set({
+        "arxiv_id": paper.arxiv_id,
+        "title": paper.title,
+        "abstract": paper.abstract,
+        "categories": paper.categories,
+        "sent_at": firestore.SERVER_TIMESTAMP,
+        "telegram_message_id": telegram_message_id,
+        "vote_count": 0,
+        "last_vote_at": None,
+    })
+    logger.info(f"Saved paper {paper.arxiv_id} to Firestore (msg_id={telegram_message_id})")
 
 
 def format_telegram_digest(paper_summaries: list[tuple[Paper, PaperSummary]]) -> list[str]:
     """Format paper summaries into separate Telegram messages — one header + one per paper."""
-    date_str = datetime.utcnow().strftime("%A, %d %B %Y")
+    date_str = datetime.now().strftime("%A, %d %B %Y")
     header = (
         f"📚 *arXiv Daily Digest*\n"
         f"_{date_str}_\n"
@@ -339,6 +381,8 @@ def main():
     paper_summaries = [(paper, process_paper(paper)) for paper in top_papers]
     messages = format_telegram_digest(paper_summaries)
     success = asyncio.run(send_digest(messages))
+    for i in range(TOP_N_PAPERS):
+        save_paper_to_firestore(top_papers[i], messages[i])
     logger.info(f"Digest sent: {success}")
 
 if __name__ == "__main__":
