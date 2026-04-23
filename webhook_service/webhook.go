@@ -1,28 +1,45 @@
 package main
 
 import (
-    "fmt"
-    "log"
-	"time"
-    "net/http"
 	"encoding/json"
+	"log"
+	"net/http"
+	"time"
 )
 
 type Update struct {
-	UpdateID      int64          `json:"update_id"`
-	Message       *Message       `json:"message,omitempty"`
-	EditedMessage *Message       `json:"edited_message,omitempty"`
-	CallbackQuery *CallbackQuery `json:"callback_query,omitempty"`
+	UpdateID                    int64                        `json:"update_id"`
+	Message                     *Message                     `json:"message,omitempty"`
+	EditedMessage               *Message                     `json:"edited_message,omitempty"`
+	CallbackQuery               *CallbackQuery               `json:"callback_query,omitempty"`
+	MessageReactionCountUpdated *MessageReactionCountUpdated `json:"message_reaction,omitempty"`
+}
+
+type MessageReactionCountUpdated struct {
+	Chat      Chat            `json:"chat"`
+	MessageID int64           `json:"message_id"`
+	Date      int64           `json:"date"`
+	Reactions []ReactionCount `json:"reactions"`
+}
+
+type ReactionCount struct {
+	Type  *ReactionTypeEmoji `json:"type,omitempty"`
+	Count int64              `json:"total_count,omitempty"`
+}
+
+type ReactionTypeEmoji struct {
+	Type  string `json:"type,omitempty"`
+	Emoji string `json:"emoji,omitempty"`
 }
 
 type Message struct {
-	MessageID       int64      `json:"message_id"`
-	From            *User      `json:"from,omitempty"`
-	Chat            Chat       `json:"chat"`
-	Date            int64      `json:"date"`
-	Text            string     `json:"text,omitempty"`
-	Entities        []Entity   `json:"entities,omitempty"`
-	ReplyToMessage  *Message   `json:"reply_to_message,omitempty"`
+	MessageID      int64    `json:"message_id"`
+	From           *User    `json:"from,omitempty"`
+	Chat           Chat     `json:"chat"`
+	Date           int64    `json:"date"`
+	Text           string   `json:"text,omitempty"`
+	Entities       []Entity `json:"entities,omitempty"`
+	ReplyToMessage *Message `json:"reply_to_message,omitempty"`
 }
 
 type User struct {
@@ -48,7 +65,6 @@ type Entity struct {
 	URL    string `json:"url,omitempty"`
 }
 
-
 type CallbackQuery struct {
 	ID      string   `json:"id"`
 	From    User     `json:"from"`
@@ -64,12 +80,16 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	var u Update
 	err := json.NewDecoder(r.Body).Decode(&u)
 	if err != nil {
-        http.Error(w, err.Error(), http.StatusBadRequest)
-        return
-    }
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if u.MessageReactionCountUpdated == nil {
+		http.Error(w, "Invalid Webhook Type", http.StatusBadRequest)
+		return
+	}
 }
 
 func main() {
-    http.HandleFunc("/", handler)
-    log.Fatal(http.ListenAndServe(":8080", nil))
+	http.HandleFunc("/", handler)
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
