@@ -32,9 +32,6 @@ type Config struct {
 
 type Update struct {
 	UpdateID                    int64                        `json:"update_id"`
-	Message                     *Message                     `json:"message,omitempty"`
-	EditedMessage               *Message                     `json:"edited_message,omitempty"`
-	CallbackQuery               *CallbackQuery               `json:"callback_query,omitempty"`
 	MessageReactionCountUpdated *MessageReactionCountUpdated `json:"message_reaction,omitempty"`
 }
 
@@ -55,48 +52,11 @@ type ReactionTypeEmoji struct {
 	Emoji string `json:"emoji,omitempty"`
 }
 
-type Message struct {
-	MessageID      int64    `json:"message_id"`
-	From           *User    `json:"from,omitempty"`
-	Chat           Chat     `json:"chat"`
-	Date           int64    `json:"date"`
-	Text           string   `json:"text,omitempty"`
-	Entities       []Entity `json:"entities,omitempty"`
-	ReplyToMessage *Message `json:"reply_to_message,omitempty"`
-}
-
-func (m *Message) Time() time.Time {
-	return time.Unix(m.Date, 0)
-}
-
-type User struct {
-	ID           int64  `json:"id"`
-	IsBot        bool   `json:"is_bot"`
-	FirstName    string `json:"first_name"`
-	LastName     string `json:"last_name,omitempty"`
-	Username     string `json:"username,omitempty"`
-	LanguageCode string `json:"language_code,omitempty"`
-}
-
 type Chat struct {
 	ID       int64  `json:"id"`
 	Type     string `json:"type"`
 	Title    string `json:"title,omitempty"`
 	Username string `json:"username,omitempty"`
-}
-
-type Entity struct {
-	Type   string `json:"type"`
-	Offset int    `json:"offset"`
-	Length int    `json:"length"`
-	URL    string `json:"url,omitempty"`
-}
-
-type CallbackQuery struct {
-	ID      string   `json:"id"`
-	From    User     `json:"from"`
-	Message *Message `json:"message,omitempty"`
-	Data    string   `json:"data,omitempty"`
 }
 
 type Server struct {
@@ -117,7 +77,6 @@ func mustGetEnv(key string) string {
 }
 
 func loadConfig() *Config {
-
 	return &Config{
 		ProjectID:             mustGetEnv("GCP_PROJECT_ID"),
 		LocationID:            mustGetEnv("DATABASE_URL"),
