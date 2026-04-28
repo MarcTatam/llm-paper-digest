@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
+	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
+	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	"cloud.google.com/go/firestore"
 	"cloud.google.com/go/firestore/apiv1/firestorepb"
 )
@@ -17,6 +20,15 @@ const (
 	UpVote   = "👍"
 	DownVote = "👎"
 )
+
+type Config struct {
+	ProjectID             string
+	LocationID            string
+	QueueID               string
+	PapersCollectionName  string
+	ProfileCollectionName string
+	GenerationURL         string
+}
 
 type Update struct {
 	UpdateID                    int64                        `json:"update_id"`
@@ -53,6 +65,10 @@ type Message struct {
 	ReplyToMessage *Message `json:"reply_to_message,omitempty"`
 }
 
+func (m *Message) Time() time.Time {
+	return time.Unix(m.Date, 0)
+}
+
 type User struct {
 	ID           int64  `json:"id"`
 	IsBot        bool   `json:"is_bot"`
@@ -83,21 +99,33 @@ type CallbackQuery struct {
 	Data    string   `json:"data,omitempty"`
 }
 
-func (m *Message) Time() time.Time {
-	return time.Unix(m.Date, 0)
+type Server struct {
+	cfg       *Config
+	firestore *firestore.Client
+	tasks     *cloudtasks.Client
 }
 
-func createClient(ctx context.Context) *firestore.Client {
-	// Sets your Google Cloud Platform project ID.
-	projectID := "YOUR_PROJECT_ID"
-
-	client, err := firestore.NewClient(ctx, projectID)
-	if err != nil {
-		log.Fatalf("Failed to create client: %v", err)
+func mustGetEnv(key string) string {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		panic(fmt.Sprintf("required environment variable %s is not set", key))
 	}
-	// Close client when done with
-	// defer client.Close()
-	return client
+	if v == "" {
+		panic(fmt.Sprintf("required environment variable %s is empty", key))
+	}
+	return v
+}
+
+func loadConfig() *Config {
+
+	return &Config{
+		ProjectID:             mustGetEnv("GCP_PROJECT_ID"),
+		LocationID:            mustGetEnv("DATABASE_URL"),
+		QueueID:               mustGetEnv("API_KEY"),
+		PapersCollectionName:  mustGetEnv(("PAPERS_COLLECTION_NAME")),
+		ProfileCollectionName: mustGetEnv(("PROFILE_COLLECTION_NAME")),
+		GenerationURL:         mustGetEnv("GENERATION_URL"),
+	}
 }
 
 func calculateScore(reactions MessageReactionCountUpdated) (int64, int64) {
@@ -155,13 +183,32 @@ func getUpdatedCount(ctx context.Context, client *firestore.Client) (int64, erro
 	return updatedCount, nil
 }
 
-func queueProfileGenerationTask(ctx context.Context) error {
+func queueProfileGenerationTask(ctx context.Context, client *cloudtasks.Client, projectID string, locationID string, queueID string, url string) error {
+
+	queuePath := fmt.Sprintf("projects/%s/locations/%s/queues/%s", projectID, locationID, queueID)
+
+	req := &taskspb.CreateTaskRequest{
+		Parent: queuePath,
+		Task: &taskspb.Task{
+			MessageType: &taskspb.Task_HttpRequest{
+				HttpRequest: &taskspb.HttpRequest{
+					HttpMethod: taskspb.HttpMethod_POST,
+					Url:        url,
+				},
+			},
+		},
+	}
+
+	_, err := client.CreateTask(ctx, req)
+	if err != nil {
+		return fmt.Errorf("cloudtasks.CreateTask: %w", err)
+	}
+
 	return nil
 }
 
-func handler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	client := createClient(ctx)
 	var u Update
 	err := json.NewDecoder(r.Body).Decode(&u)
 	if err != nil {
@@ -174,31 +221,46 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}
 	score, id := calculateScore(*u.MessageReactionCountUpdated)
 	timestamp := time.Unix(u.MessageReactionCountUpdated.Date, 0)
-	if err := updateScore(ctx, client, id, score, timestamp); err != nil {
+	if err := updateScore(ctx, s.firestore, id, score, timestamp); err != nil {
 		log.Printf("failed to update score: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	updatedCount, err := getUpdatedCount(ctx, client)
+	updatedCount, err := getUpdatedCount(ctx, s.firestore)
 	if err != nil {
 		log.Printf("Failed to get updated papers count: %v", err)
 		http.Error(w, "Internal server error", http.StatusBadRequest)
 		return
 	}
 	if updatedCount > 10 {
-		queueProfileGenerationTask(ctx)
+		err = queueProfileGenerationTask(ctx, s.tasks, s.cfg.ProjectID, s.cfg.LocationID, s.cfg.QueueID, s.cfg.GenerationURL)
+		if err != nil {
+			log.Printf("Failed to queue regeneration %v", err)
+		}
 	}
 	w.WriteHeader(http.StatusOK)
 }
 
 func main() {
 	ctx := context.Background()
-	client, err := firestore.NewClient(ctx, "") // TODO: Set Project ID
+	cfg := loadConfig()
+	fsClient, err := firestore.NewClient(ctx, cfg.ProjectID)
 	if err != nil {
 		log.Fatalf("failed to create firestore client: %v", err)
 	}
-	defer client.Close()
+	defer fsClient.Close()
+	tasksClient, err := cloudtasks.NewClient(ctx)
+	if err != nil {
+		log.Fatalf("failed to create cloud tasks client: %v", err)
+	}
+	defer tasksClient.Close()
 
-	http.HandleFunc("/", handler)
+	server := Server{
+		cfg:       cfg,
+		firestore: fsClient,
+		tasks:     tasksClient,
+	}
+
+	http.HandleFunc("/", server.handler)
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
