@@ -317,7 +317,7 @@ def save_paper_to_firestore(
         "categories": paper.categories,
         "sent_at": firestore.SERVER_TIMESTAMP,
         "telegram_message_id": telegram_message_id,
-        "vote_count": 0,
+        "score": 0,
         "last_vote_at": None,
     })
     logger.info(f"Saved paper {paper.arxiv_id} to Firestore (msg_id={telegram_message_id})")

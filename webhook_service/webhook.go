@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"time"
 
 	"cloud.google.com/go/firestore"
+	"cloud.google.com/go/firestore/apiv1/firestorepb"
 )
 
 const (
@@ -117,12 +119,43 @@ func calculateScore(reactions MessageReactionCountUpdated) (int64, int64) {
 
 func updateScore(ctx context.Context, client *firestore.Client, messageID int64, score int64, timestamp time.Time) error {
 	_, err := client.Collection("").Doc(fmt.Sprintf("%d", messageID)).Set(ctx, map[string]interface{}{ // TODO: Set Collection
-		"score":     score,
-		"timestamp": timestamp,
+		"score":        score,
+		"last_vote_at": timestamp,
 	})
 	if err != nil {
 		return fmt.Errorf("updating score for message %d: %w", messageID, err)
 	}
+	return nil
+}
+
+func getUpdatedCount(ctx context.Context, client *firestore.Client) (int64, error) {
+	query := client.Collection("").OrderBy("generated_at", firestore.Desc).LimitToLast(1)
+	fetchedProfiles, err := query.Documents(ctx).GetAll()
+	if err != nil {
+		return 0, err
+	}
+	latestProfile := fetchedProfiles[0].Data()
+	last_profile_timestamp, ok := latestProfile["generated_at"].(int64)
+	if !ok {
+		return 0, errors.New("Parse error when retrieving last profile time stamp.")
+	}
+	query = client.Collection("").Where("timestamp", ">", last_profile_timestamp)
+	aggregationQuery := query.NewAggregationQuery().WithCount("all")
+	results, err := aggregationQuery.Get(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	count, ok := results["all"]
+	if !ok {
+		return 0, errors.New("firestore: couldn't get alias for COUNT from results")
+	}
+
+	updatedCount := count.(*firestorepb.Value).GetIntegerValue()
+	return updatedCount, nil
+}
+
+func queueProfileGenerationTask(ctx context.Context) error {
 	return nil
 }
 
@@ -143,8 +176,17 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	timestamp := time.Unix(u.MessageReactionCountUpdated.Date, 0)
 	if err := updateScore(ctx, client, id, score, timestamp); err != nil {
 		log.Printf("failed to update score: %v", err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
+	}
+	updatedCount, err := getUpdatedCount(ctx, client)
+	if err != nil {
+		log.Printf("Failed to get updated papers count: %v", err)
+		http.Error(w, "Internal server error", http.StatusBadRequest)
+		return
+	}
+	if updatedCount > 10 {
+		queueProfileGenerationTask(ctx)
 	}
 	w.WriteHeader(http.StatusOK)
 }
