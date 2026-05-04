@@ -74,6 +74,13 @@ class PaperSummary(BaseModel):
 
     model_config = ConfigDict(extra='forbid')
 
+class Profile(BaseModel):
+    liked_themes: list[str]
+    disliked_themes: list[str]
+    prose_summary: str
+
+    model_config = ConfigDict(extra="forbid")
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -138,12 +145,28 @@ def fetch_arxiv_papers(
 def rank_papers_with_claude(
     papers: list[Paper],
     top_n: int = 5,
-) -> dict:
+) -> list[Paper]:
     """Use Claude to rank papers by relevance and generate a digest."""
     if not papers:
-        return {"papers": [], "digest": "No papers found today."}
+        return []
 
-    # Build paper summaries for the prompt
+    profile = fetch_latest_profile()
+    if profile is None:
+        logger.warning("No profile found in Firestore; falling back to static interests")
+        interests_block = USER_INTERESTS
+    else:
+        liked = "\n".join(f"- {theme}" for theme in profile.liked_themes)
+        disliked = (
+            "\n".join(f"- {theme}" for theme in profile.disliked_themes)
+            if profile.disliked_themes
+            else "(none)"
+        )
+        interests_block = (
+            f"{profile.prose_summary}\n\n"
+            f"Themes the user is drawn to:\n{liked}\n\n"
+            f"Themes the user consistently passes on:\n{disliked}"
+        )
+
     paper_list = ""
     for i, p in enumerate(papers):
         authors_str = ", ".join(p.authors[:3])
@@ -159,7 +182,7 @@ def rank_papers_with_claude(
     prompt = f"""You are an AI research digest assistant. Your job is to identify the most interesting and relevant papers for a software engineer working in AI/ML consulting.
 
 Here are the user's interests:
-{USER_INTERESTS}
+{interests_block}
 
 Here are today's new arXiv papers:
 {paper_list}
@@ -167,13 +190,14 @@ Here are today's new arXiv papers:
 Please:
 1. Select the top {top_n} most relevant papers based on the user's interests by using their index.
 2. Do not select any papers that are purely theoretical or are just benchmarks.
+3. Prefer papers aligned with the liked themes; avoid papers that match the disliked themes unless they are clearly exceptional.
 """
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     logger.info("Sending papers to Claude for ranking...")
     output_config = anthropic.types.OutputConfigParam(
-        format = anthropic.types.JSONOutputFormatParam(
+        format=anthropic.types.JSONOutputFormatParam(
             schema=PaperSelection.model_json_schema(),
             type='json_schema'
         )
@@ -321,6 +345,27 @@ def save_paper_to_firestore(
         "last_vote_at": None,
     })
     logger.info(f"Saved paper {paper.arxiv_id} to Firestore (msg_id={telegram_message_id})")
+
+
+def fetch_latest_profile() -> Profile | None:
+    """Fetch the most recently created profile from Firestore.
+
+    Returns None if no profiles exist in the collection.
+    """
+    collection_name = os.environ["PROFILES_COLLECTION"]
+
+    client = firestore.Client()
+    query = (
+        client.collection(collection_name)
+        .order_by("created_at", direction=firestore.Query.DESCENDING)
+        .limit(1)
+    )
+
+    docs = list(query.stream())
+    if not docs:
+        return None
+
+    return Profile.model_validate(docs[0].to_dict())
 
 
 def format_telegram_digest(paper_summaries: list[tuple[Paper, PaperSummary]]) -> list[str]:
