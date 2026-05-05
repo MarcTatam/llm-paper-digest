@@ -8,6 +8,7 @@ Deployed on Cloud Run, triggered daily by Cloud Scheduler.
 """
 
 import base64
+import io
 import os
 import logging
 import asyncio
@@ -20,6 +21,7 @@ import anthropic
 import requests
 from google.cloud import firestore
 from pydantic import BaseModel, Field, ConfigDict
+from pypdf import PdfReader, PdfWriter
 
 
 # --- Configuration ---
@@ -239,47 +241,94 @@ Please:
 
     return selected_papers
 
-def process_paper(paper:Paper)->PaperSummary:
-    time.sleep(65)
-    reponse = requests.get(paper.get_pdf_url())
-    paper = base64.b64encode(reponse.content).decode("utf-8")
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
-    logger.info("Sending paper to Claude for summarisation...")
+def _truncate_pdf(pdf_bytes: bytes, head_pages: int = 20, tail_pages: int = 50) -> bytes:
+    """Return a new PDF containing only the first `head_pages` and last `tail_pages`.
+ 
+    If the PDF is small enough that head + tail would overlap or cover the whole
+    document, the original bytes are returned unchanged.
+    """
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    total = len(reader.pages)
+ 
+    if total <= head_pages + tail_pages:
+        return pdf_bytes
+ 
+    writer = PdfWriter()
+    for i in range(head_pages):
+        writer.add_page(reader.pages[i])
+    for i in range(total - tail_pages, total):
+        writer.add_page(reader.pages[i])
+ 
+    buf = io.BytesIO()
+    writer.write(buf)
+    logger.info(
+        "Truncated PDF from %d pages to %d (first %d + last %d).",
+        total, head_pages + tail_pages, head_pages, tail_pages,
+    )
+    return buf.getvalue()
+ 
+ 
+def _build_message(client: anthropic.Anthropic, pdf_b64: str) -> anthropic.types.Message:
     output_config = anthropic.types.OutputConfigParam(
-        format = anthropic.types.JSONOutputFormatParam(
+        format=anthropic.types.JSONOutputFormatParam(
             schema=PaperSummary.model_json_schema(),
-            type='json_schema'
+            type="json_schema",
         )
     )
-    message = client.messages.create(
+    return client.messages.create(
         model=CLAUDE_MODEL_SUMMARY,
         max_tokens=2000,
-        messages=[{"role": "user", "content": [{
-            "type" : "document",
-            "source" : {
-                "type" : "base64",
-                "media_type" : "application/pdf",
-                "data" : paper
-            }
-        },
-        {
-            "type" : "text",
-            "text" : """Summarise this paper for a morning digest read by an AI engineer. Be concise — each field should be a few sentences at most.
-
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": pdf_b64,
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": """Summarise this paper for a morning digest read by an AI engineer. Be concise — each field should be a few sentences at most.
+ 
 Rules:
 - No filler phrases like "This paper presents" or "The authors propose" — just say what it does.
 - Assume the reader understands transformers, RAG, RL, and standard ML concepts.
 - Focus on what's novel, not background.
 - For the prototype, be specific and actionable, not vague.
 - For impact, think: what changes in production AI systems if this works?
-- Total response should be under 250 words."""
-        }]}],
-        output_config=output_config
+- Total response should be under 250 words.""",
+                },
+            ],
+        }],
+        output_config=output_config,
     )
-    logger.info('Recevieved Claude Summary.')
-    summary_response = PaperSummary.model_validate_json(message.content[0].text)
-    return summary_response
+ 
+ 
+def process_paper(paper: Paper) -> PaperSummary:
+    time.sleep(65)
+    response = requests.get(paper.get_pdf_url())
+    pdf_bytes = response.content
+    pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+ 
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+ 
+    logger.info("Sending paper to Claude for summarisation...")
+    try:
+        message = _build_message(client, pdf_b64)
+    except anthropic.BadRequestError as e:
+        # Only retry on the specific page-limit error; re-raise anything else.
+        if "100 PDF pages" not in str(e):
+            raise
+        logger.warning("Paper exceeded 100 pages; truncating to first 20 + last 50.")
+        truncated = _truncate_pdf(pdf_bytes, head_pages=20, tail_pages=50)
+        pdf_b64 = base64.b64encode(truncated).decode("utf-8")
+        message = _build_message(client, pdf_b64)
+ 
+    logger.info("Received Claude summary.")
+    return PaperSummary.model_validate_json(message.content[0].text)
 
 async def send_telegram_message(text: str, parse_mode: str = "Markdown") -> int | None:
     """Send a single message via Telegram bot, splitting if over 4096 chars."""
