@@ -3,27 +3,24 @@ steps:
     args:
       - 'build'
       - '-t'
-      - 'gcr.io/$PROJECT_ID/arxiv-digest:latest'
+      - 'gcr.io/$PROJECT_ID/arxiv-service:latest'
       - '.'
 
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
       - '--all-tags'
-      - 'gcr.io/$PROJECT_ID/arxiv-digest'
+      - 'gcr.io/$PROJECT_ID/arxiv-service'
 
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'gcloud'
     args:
       - 'run'
-      - 'jobs'
+      - 'services'
       - 'update'
-      - 'arxiv-digest'
-      - '--image=gcr.io/$PROJECT_ID/arxiv-digest:latest'
+      - 'arxiv-service'
+      - '--image=gcr.io/$PROJECT_ID/arxiv-service:latest'
       - '--region=$_REGION'
-      - '--task-timeout=600'
-      - '--memory=512Mi'
-      - '--max-retries=0'
       - '--project=$PROJECT_ID'
 
 options:
@@ -33,4 +30,4 @@ substitutions:
   _REGION: europe-west2
 
 images:
-  - 'gcr.io/$PROJECT_ID/arxiv-digest'
+  - 'gcr.io/$PROJECT_ID/arxiv-service'

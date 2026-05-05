@@ -39,16 +39,6 @@ variable "claude_model_summary" {
   description = "Claude model to use for summarisation."
 }
 
-variable "image" {
-  type = string
-  description = "Name of the image to use."
-}
-
-variable "profile_image" {
-  type        = string
-  description = "Name of the profile job image to use."
-}
-
 variable "papers_collection" {
   type        = string
   default     = "sent_papers"

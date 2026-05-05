@@ -32,7 +32,7 @@ resource "google_cloud_run_v2_job" "profile_job" {
       timeout         = "600s"
 
       containers {
-        image = var.profile_image
+        image = "us-docker.pkg.dev/cloudrun/container/hello"
 
         resources {
           limits = {
@@ -42,7 +42,7 @@ resource "google_cloud_run_v2_job" "profile_job" {
         }
 
         env {
-          name  = "FIRESTORE_COLLECTION"
+          name  = "PAPERS_COLLECTION"
           value = var.papers_collection
         }
 
@@ -72,6 +72,10 @@ resource "google_cloud_run_v2_job" "profile_job" {
         }
       }
     }
+  }
+
+  lifecycle {
+    ignore_changes = [ template[0].template[0].containers[0].image ]
   }
 
   depends_on = [

@@ -36,7 +36,8 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 CLAUDE_MODEL_RANKING = os.getenv("CLAUDE_MODEL_RANKING", "claude-sonnet-4-5-20250514")
 CLAUDE_MODEL_SUMMARY = os.getenv("CLAUDE_MODEL_SUMMARY", "claude-sonnet-4-5-20250514")
 
-FIRESTORE_COLLECTION = os.getenv("FIRESTORE_COLLECTION", "sent_papers")
+PAPERS_COLLECTION = os.getenv("PAPERS_COLLECTION")
+PROFILES_COLLECTION = os.getenv("PROFILES_COLLECTION")
 
 USER_INTERESTS = os.getenv("USER_INTERESTS", """
 - LLM-powered tools and applications (RAG, agents, tool use)
@@ -141,6 +142,25 @@ def fetch_arxiv_papers(
 
     logger.info(f"Fetched {len(papers)} papers from arXiv")
     return papers
+
+def fetch_latest_profile() -> Profile | None:
+    """Fetch the most recently created profile from Firestore.
+
+    Returns None if no profiles exist in the collection.
+    """
+
+    client = firestore.Client()
+    query = (
+        client.collection(PROFILES_COLLECTION)
+        .order_by("created_at", direction=firestore.Query.DESCENDING)
+        .limit(1)
+    )
+
+    docs = list(query.stream())
+    if not docs:
+        return None
+
+    return Profile.model_validate(docs[0].to_dict())
 
 def rank_papers_with_claude(
     papers: list[Paper],
@@ -333,7 +353,7 @@ def save_paper_to_firestore(
     if db is None:
         db = firestore.Client()
 
-    doc_ref = db.collection(FIRESTORE_COLLECTION).document(paper.arxiv_id)
+    doc_ref = db.collection(PAPERS_COLLECTION).document(paper.arxiv_id)
     doc_ref.set({
         "arxiv_id": paper.arxiv_id,
         "title": paper.title,
@@ -345,27 +365,6 @@ def save_paper_to_firestore(
         "last_vote_at": None,
     })
     logger.info(f"Saved paper {paper.arxiv_id} to Firestore (msg_id={telegram_message_id})")
-
-
-def fetch_latest_profile() -> Profile | None:
-    """Fetch the most recently created profile from Firestore.
-
-    Returns None if no profiles exist in the collection.
-    """
-    collection_name = os.environ["PROFILES_COLLECTION"]
-
-    client = firestore.Client()
-    query = (
-        client.collection(collection_name)
-        .order_by("created_at", direction=firestore.Query.DESCENDING)
-        .limit(1)
-    )
-
-    docs = list(query.stream())
-    if not docs:
-        return None
-
-    return Profile.model_validate(docs[0].to_dict())
 
 
 def format_telegram_digest(paper_summaries: list[tuple[Paper, PaperSummary]]) -> list[str]:

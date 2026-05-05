@@ -30,3 +30,14 @@ resource "google_project_service" "apis" {
   service            = each.value
   disable_on_destroy = false
 }
+
+resource "google_service_account" "arxiv_digest" {
+  account_id   = "arxiv-digest-runner"
+  display_name = "arXiv Digest Cloud Run Job"
+}
+
+resource "google_project_iam_member" "firestore" {
+  member = google_service_account.arxiv_digest.member
+  role = "roles/datastore.editor"
+  project = var.project_name
+}

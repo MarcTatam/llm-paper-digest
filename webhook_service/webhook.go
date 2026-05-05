@@ -80,7 +80,7 @@ func loadConfig() *Config {
 	return &Config{
 		ProjectID:             mustGetEnv("GCP_PROJECT_ID"),
 		LocationID:            mustGetEnv("DATABASE_URL"),
-		QueueID:               mustGetEnv("API_KEY"),
+		QueueID:               mustGetEnv("QUEUE_ID"),
 		PapersCollectionName:  mustGetEnv(("PAPERS_COLLECTION_NAME")),
 		ProfileCollectionName: mustGetEnv(("PROFILE_COLLECTION_NAME")),
 		GenerationURL:         mustGetEnv("GENERATION_URL"),

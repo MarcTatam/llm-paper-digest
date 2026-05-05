@@ -3,14 +3,14 @@ steps:
     args:
       - 'build'
       - '-t'
-      - 'gcr.io/$PROJECT_ID/arxiv-digest:latest'
+      - 'gcr.io/$PROJECT_ID/arxiv-profile:latest'
       - '.'
 
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
       - '--all-tags'
-      - 'gcr.io/$PROJECT_ID/arxiv-digest'
+      - 'gcr.io/$PROJECT_ID/arxiv-profile'
 
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'gcloud'
@@ -18,8 +18,8 @@ steps:
       - 'run'
       - 'jobs'
       - 'update'
-      - 'arxiv-digest'
-      - '--image=gcr.io/$PROJECT_ID/arxiv-digest:latest'
+      - 'arxiv-profile'
+      - '--image=gcr.io/$PROJECT_ID/arxiv-profile:latest'
       - '--region=$_REGION'
       - '--task-timeout=600'
       - '--memory=512Mi'
@@ -33,4 +33,4 @@ substitutions:
   _REGION: europe-west2
 
 images:
-  - 'gcr.io/$PROJECT_ID/arxiv-digest'
+  - 'gcr.io/$PROJECT_ID/arxiv-profile'
