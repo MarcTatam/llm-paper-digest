@@ -2,6 +2,8 @@ resource "google_cloud_run_v2_service" "webhook_service" {
   name     = "webhook-service"
   location = var.region
 
+  ingress = "INGRESS_TRAFFIC_ALL"
+
   template {
     scaling {
       min_instance_count = 0
@@ -43,4 +45,12 @@ resource "google_cloud_run_v2_service" "webhook_service" {
   lifecycle {
     ignore_changes = [ template[0].containers[0].image ]
   }
+}
+
+resource "google_cloud_run_v2_service_iam_member" "webhook_public" {
+  project  = google_cloud_run_v2_service.webhook_service.project
+  location = google_cloud_run_v2_service.webhook_service.location
+  name     = google_cloud_run_v2_service.webhook_service.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
 }
