@@ -18,7 +18,7 @@ steps:
       - 'run'
       - 'services'
       - 'update'
-      - 'arxiv-service'
+      - 'webhook-service'
       - '--image=gcr.io/$PROJECT_ID/arxiv-service:latest'
       - '--region=$_REGION'
       - '--project=$PROJECT_ID'
