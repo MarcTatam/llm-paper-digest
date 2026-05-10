@@ -7,7 +7,7 @@ resource "google_cloud_run_v2_job_iam_member" "scheduler_can_invoke" {
   name     = google_cloud_run_v2_job.arxiv_digest.name
   location = var.region
   role     = "roles/run.invoker"
-  member   = "serviceAccount:${google_service_account.scheduler_invoker.email}"
+  member   = google_service_account.scheduler_invoker.member
 }
 
 resource "google_cloud_scheduler_job" "arxiv_daily_digest" {

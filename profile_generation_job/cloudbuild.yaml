@@ -18,7 +18,7 @@ steps:
       - 'run'
       - 'jobs'
       - 'update'
-      - 'arxiv-profile'
+      - 'profile-job'
       - '--image=gcr.io/$PROJECT_ID/arxiv-profile:latest'
       - '--region=$_REGION'
       - '--task-timeout=600'

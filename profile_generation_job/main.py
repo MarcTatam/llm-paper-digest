@@ -52,7 +52,7 @@ class InteractedPaper(BaseModel):
     title: str
     abstract: str
     categories: list[str]
-    vote_count: int
+    score: int
     last_vote_at: datetime
 
 
@@ -147,7 +147,7 @@ def fetch_interacted_papers(
                 title=data["title"],
                 abstract=data["abstract"],
                 categories=data.get("categories", []),
-                vote_count=data["vote_count"],
+                score=data["score"],
                 last_vote_at=last_vote_at,
             ))
         except KeyError as e:
@@ -167,12 +167,12 @@ def generate_profile(
 ) -> Profile:
     """Ask Claude to generate/update the user profile based on interacted papers."""
     # Sort by |vote_count| desc so the strongest signal is first, regardless of direction.
-    interacted_papers = sorted(interacted_papers, key=lambda p: abs(p.vote_count), reverse=True)
+    interacted_papers = sorted(interacted_papers, key=lambda p: abs(p.score), reverse=True)
 
     paper_block = ""
     for p in interacted_papers:
         paper_block += (
-            f"\n- [{p.vote_count:+d} votes] {p.title}\n"
+            f"\n- [{p.score:+d} votes] {p.title}\n"
             f"  Categories: {', '.join(p.categories) or 'n/a'}\n"
             f"  Abstract: {p.abstract}\n"
         )

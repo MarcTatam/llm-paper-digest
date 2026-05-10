@@ -7,7 +7,7 @@ resource "google_cloud_run_v2_job_iam_member" "tasks_can_invoke" {
   name     = google_cloud_run_v2_job.profile_job.name
   location = var.region
   role     = "roles/run.invoker"
-  member   = "serviceAccount:${google_service_account.tasks_invoker.email}"
+  member   = google_service_account.tasks_invoker.member
 }
 
 resource "google_cloud_tasks_queue" "profile_regen" {
@@ -27,5 +27,19 @@ resource "google_cloud_tasks_queue" "profile_regen" {
     max_retry_duration = "3600s"
   }
 
+  http_target {
+    http_method = "POST"
+
+    oauth_token {
+      service_account_email = google_service_account.tasks_invoker.email
+    }
+  }
+
   depends_on = [google_project_service.apis["cloudtasks.googleapis.com"]]
+}
+
+resource "google_cloud_tasks_queue_iam_binding" "allow_queueing" {
+  members = [google_service_account.webhook.member]
+  role = "roles/cloudtasks.enqueuer"
+  name = google_cloud_tasks_queue.profile_regen.name
 }

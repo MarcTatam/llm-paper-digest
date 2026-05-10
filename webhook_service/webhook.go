@@ -32,7 +32,8 @@ type Config struct {
 
 type Update struct {
 	UpdateID                    int64                        `json:"update_id"`
-	MessageReactionCountUpdated *MessageReactionCountUpdated `json:"message_reaction,omitempty"`
+	MessageReactionCountUpdated *MessageReactionCountUpdated `json:"message_reaction_count,omitempty"`
+	MessagReactionUpdated       *MessageReactionUpdated      `json:"message_reaction,omitempty"`
 }
 
 type MessageReactionCountUpdated struct {
@@ -40,6 +41,9 @@ type MessageReactionCountUpdated struct {
 	MessageID int64           `json:"message_id"`
 	Date      int64           `json:"date"`
 	Reactions []ReactionCount `json:"reactions"`
+}
+
+type MessageReactionUpdated struct {
 }
 
 type ReactionCount struct {
@@ -79,7 +83,7 @@ func mustGetEnv(key string) string {
 func loadConfig() *Config {
 	return &Config{
 		ProjectID:             mustGetEnv("GCP_PROJECT_ID"),
-		LocationID:            mustGetEnv("DATABASE_URL"),
+		LocationID:            mustGetEnv("LOCATION"),
 		QueueID:               mustGetEnv("QUEUE_ID"),
 		PapersCollectionName:  mustGetEnv(("PAPERS_COLLECTION_NAME")),
 		ProfileCollectionName: mustGetEnv(("PROFILE_COLLECTION_NAME")),
@@ -104,10 +108,16 @@ func calculateScore(reactions MessageReactionCountUpdated) (int64, int64) {
 	return upVotes - downVotes, reactions.MessageID
 }
 
-func updateScore(ctx context.Context, client *firestore.Client, messageID int64, score int64, timestamp time.Time) error {
-	_, err := client.Collection("").Doc(fmt.Sprintf("%d", messageID)).Set(ctx, map[string]interface{}{ // TODO: Set Collection
-		"score":        score,
-		"last_vote_at": timestamp,
+func updateScore(ctx context.Context, client *firestore.Client, config Config, messageID int64, score int64, timestamp time.Time) error {
+	_, err := client.Collection(config.PapersCollectionName).Doc(fmt.Sprintf("%d", messageID)).Update(ctx, []firestore.Update{
+		{
+			Path:  "score",
+			Value: score,
+		},
+		{
+			Path:  "last_vote_at",
+			Value: timestamp,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("updating score for message %d: %w", messageID, err)
@@ -115,18 +125,21 @@ func updateScore(ctx context.Context, client *firestore.Client, messageID int64,
 	return nil
 }
 
-func getUpdatedCount(ctx context.Context, client *firestore.Client) (int64, error) {
-	query := client.Collection("").OrderBy("generated_at", firestore.Desc).LimitToLast(1)
+func getUpdatedCount(ctx context.Context, client *firestore.Client, config Config) (int64, error) {
+	query := client.Collection(config.ProfileCollectionName).OrderBy("generated_at", firestore.Desc).LimitToLast(1)
 	fetchedProfiles, err := query.Documents(ctx).GetAll()
 	if err != nil {
 		return 0, err
+	}
+	if len(fetchedProfiles) == 0 {
+		return 10000000, nil // No profile we want to regenerate anyway.
 	}
 	latestProfile := fetchedProfiles[0].Data()
 	last_profile_timestamp, ok := latestProfile["generated_at"].(int64)
 	if !ok {
 		return 0, errors.New("Parse error when retrieving last profile time stamp.")
 	}
-	query = client.Collection("").Where("timestamp", ">", last_profile_timestamp)
+	query = client.Collection(config.PapersCollectionName).Where("timestamp", ">", last_profile_timestamp)
 	aggregationQuery := query.NewAggregationQuery().WithCount("all")
 	results, err := aggregationQuery.Get(ctx)
 	if err != nil {
@@ -142,12 +155,10 @@ func getUpdatedCount(ctx context.Context, client *firestore.Client) (int64, erro
 	return updatedCount, nil
 }
 
-func queueProfileGenerationTask(ctx context.Context, client *cloudtasks.Client, projectID string, locationID string, queueID string, url string) error {
-
-	queuePath := fmt.Sprintf("projects/%s/locations/%s/queues/%s", projectID, locationID, queueID)
+func queueProfileGenerationTask(ctx context.Context, client *cloudtasks.Client, queueID string, url string) error {
 
 	req := &taskspb.CreateTaskRequest{
-		Parent: queuePath,
+		Parent: queueID,
 		Task: &taskspb.Task{
 			MessageType: &taskspb.Task_HttpRequest{
 				HttpRequest: &taskspb.HttpRequest{
@@ -166,6 +177,20 @@ func queueProfileGenerationTask(ctx context.Context, client *cloudtasks.Client, 
 	return nil
 }
 
+func validUpdate(u Update) bool {
+	if u.MessageReactionCountUpdated != nil {
+		log.Println("Message reaction count updated.")
+		return true
+	}
+
+	if u.MessagReactionUpdated != nil {
+		log.Println("Message reaction updated.")
+		return true
+	}
+	log.Println("Unknown type.")
+	return false
+}
+
 func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var u Update
@@ -174,25 +199,25 @@ func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if u.MessageReactionCountUpdated == nil {
+	if !validUpdate(u) {
 		http.Error(w, "Invalid Webhook Type", http.StatusBadRequest)
 		return
 	}
 	score, id := calculateScore(*u.MessageReactionCountUpdated)
 	timestamp := time.Unix(u.MessageReactionCountUpdated.Date, 0)
-	if err := updateScore(ctx, s.firestore, id, score, timestamp); err != nil {
+	if err := updateScore(ctx, s.firestore, *s.cfg, id, score, timestamp); err != nil {
 		log.Printf("failed to update score: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	updatedCount, err := getUpdatedCount(ctx, s.firestore)
+	updatedCount, err := getUpdatedCount(ctx, s.firestore, *s.cfg)
 	if err != nil {
 		log.Printf("Failed to get updated papers count: %v", err)
 		http.Error(w, "Internal server error", http.StatusBadRequest)
 		return
 	}
 	if updatedCount > 10 {
-		err = queueProfileGenerationTask(ctx, s.tasks, s.cfg.ProjectID, s.cfg.LocationID, s.cfg.QueueID, s.cfg.GenerationURL)
+		err = queueProfileGenerationTask(ctx, s.tasks, s.cfg.QueueID, s.cfg.GenerationURL)
 		if err != nil {
 			log.Printf("Failed to queue regeneration %v", err)
 		}

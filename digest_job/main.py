@@ -402,14 +402,14 @@ def save_paper_to_firestore(
     if db is None:
         db = firestore.Client()
 
-    doc_ref = db.collection(PAPERS_COLLECTION).document(paper.arxiv_id)
+    doc_ref = db.collection(PAPERS_COLLECTION).document(str(telegram_message_id))
     doc_ref.set({
+        "telegram_message_id": telegram_message_id,
         "arxiv_id": paper.arxiv_id,
         "title": paper.title,
         "abstract": paper.abstract,
         "categories": paper.categories,
         "sent_at": firestore.SERVER_TIMESTAMP,
-        "telegram_message_id": telegram_message_id,
         "score": 0,
         "last_vote_at": None,
     })
@@ -473,10 +473,10 @@ def main():
     top_papers = rank_papers_with_claude(all_papers, TOP_N_PAPERS)
     paper_summaries = [(paper, process_paper(paper)) for paper in top_papers]
     messages = format_telegram_digest(paper_summaries)
-    success = asyncio.run(send_digest(messages))
+    message_ids = asyncio.run(send_digest(messages))
     for i in range(TOP_N_PAPERS):
-        save_paper_to_firestore(top_papers[i], messages[i])
-    logger.info(f"Digest sent: {success}")
+        save_paper_to_firestore(top_papers[i], message_ids[i])
+    logger.info(f"Digest sent: {message_ids}")
 
 if __name__ == "__main__":
     main()
