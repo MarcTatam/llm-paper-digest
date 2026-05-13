@@ -51,6 +51,11 @@ resource "google_cloud_run_v2_service" "webhook_service" {
       }
 
       env {
+        name = "VOTE_THRESHOLD"
+        value = var.vote_threshold
+      }
+
+      env {
         name = "WEBHOOK_SECRET"
         value_source {
           secret_key_ref {

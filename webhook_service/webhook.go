@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
@@ -33,6 +34,7 @@ type Config struct {
 	ProfileCollectionName string
 	GenerationURL         string
 	WebhookSecret         string
+	VoteThreshold         int
 }
 
 type Update struct {
@@ -86,6 +88,10 @@ func mustGetEnv(key string) string {
 }
 
 func loadConfig() *Config {
+	vote_thershold, err := strconv.Atoi(mustGetEnv("VOTE_THRESHOLD"))
+	if err != nil {
+		panic("Required environment variable VOTE_THRESHOLD is not of the correct type.")
+	}
 	return &Config{
 		ProjectID:             mustGetEnv("GCP_PROJECT_ID"),
 		LocationID:            mustGetEnv("LOCATION"),
@@ -94,6 +100,7 @@ func loadConfig() *Config {
 		ProfileCollectionName: mustGetEnv("PROFILE_COLLECTION_NAME"),
 		GenerationURL:         mustGetEnv("GENERATION_URL"),
 		WebhookSecret:         mustGetEnv("WEBHOOK_SECRET"),
+		VoteThreshold:         vote_thershold,
 	}
 }
 
@@ -238,7 +245,7 @@ func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error", http.StatusBadRequest)
 		return
 	}
-	if updatedCount > 10 {
+	if updatedCount > int64(s.cfg.VoteThreshold) {
 		err = queueProfileGenerationTask(ctx, s.tasks, s.cfg.QueueID, s.cfg.GenerationURL)
 		if err != nil {
 			log.Printf("Failed to queue regeneration %v", err)

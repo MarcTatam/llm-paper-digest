@@ -139,7 +139,7 @@ def fetch_interacted_papers(
     for doc in docs:
         data = doc.to_dict()
         last_vote_at = data["last_vote_at"]
-        if since is not None and last_vote_at <= since:
+        if since is not None and last_vote_at >= since:
             continue
         try:
             papers.append(InteractedPaper(
