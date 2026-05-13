@@ -21,7 +21,7 @@ from google.cloud import firestore
 from pydantic import BaseModel, Field, ConfigDict
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-CLAUDE_MODEL_PROFILE = os.getenv("CLAUDE_MODEL_PROFILE", "claude-sonnet-4-5-20250514")
+CLAUDE_MODEL_PROFILE = os.getenv("CLAUDE_MODEL_PROFILE", "claude-sonnet-4-5")
 
 PAPERS_COLLECTION = os.getenv("FIRESTORE_COLLECTION", "sent_papers")
 PROFILES_COLLECTION = os.getenv("PROFILES_COLLECTION", "profiles")
@@ -132,7 +132,7 @@ def fetch_interacted_papers(
     since: datetime | None,
 ) -> list[InteractedPaper]:
     """Fetch papers with any vote activity, optionally filtering by last_vote_at > since."""
-    query = db.collection(PAPERS_COLLECTION).where("last_vote_at", "!=", None)
+    query = db.collection(PAPERS_COLLECTION).where("score", "!=", 0)
     docs = query.stream()
 
     papers: list[InteractedPaper] = []

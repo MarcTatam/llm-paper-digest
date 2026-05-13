@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,9 @@ import (
 const (
 	UpVote   = "👍"
 	DownVote = "👎"
+
+	telegramSecretHeader = "X-Telegram-Bot-Api-Secret-Token"
+	maxRequestBodyBytes  = 1 << 20 // 1 MiB — Telegram updates are far smaller than this
 )
 
 type Config struct {
@@ -28,12 +32,13 @@ type Config struct {
 	PapersCollectionName  string
 	ProfileCollectionName string
 	GenerationURL         string
+	WebhookSecret         string
 }
 
 type Update struct {
-	UpdateID                    int64                        `json:"update_id"`
-	MessageReactionCountUpdated *MessageReactionCountUpdated `json:"message_reaction_count,omitempty"`
-	MessagReactionUpdated       *MessageReactionUpdated      `json:"message_reaction,omitempty"`
+	UpdateID               int64                        `json:"update_id"`
+	MessageReactionCount   *MessageReactionCountUpdated `json:"message_reaction_count,omitempty"`
+	MessageReactionUpdated *MessageReactionUpdated      `json:"message_reaction,omitempty"` // Don't actually need to handle this atm.
 }
 
 type MessageReactionCountUpdated struct {
@@ -85,9 +90,10 @@ func loadConfig() *Config {
 		ProjectID:             mustGetEnv("GCP_PROJECT_ID"),
 		LocationID:            mustGetEnv("LOCATION"),
 		QueueID:               mustGetEnv("QUEUE_ID"),
-		PapersCollectionName:  mustGetEnv(("PAPERS_COLLECTION_NAME")),
-		ProfileCollectionName: mustGetEnv(("PROFILE_COLLECTION_NAME")),
+		PapersCollectionName:  mustGetEnv("PAPERS_COLLECTION_NAME"),
+		ProfileCollectionName: mustGetEnv("PROFILE_COLLECTION_NAME"),
 		GenerationURL:         mustGetEnv("GENERATION_URL"),
+		WebhookSecret:         mustGetEnv("WEBHOOK_SECRET"),
 	}
 }
 
@@ -126,7 +132,7 @@ func updateScore(ctx context.Context, client *firestore.Client, config Config, m
 }
 
 func getUpdatedCount(ctx context.Context, client *firestore.Client, config Config) (int64, error) {
-	query := client.Collection(config.ProfileCollectionName).OrderBy("generated_at", firestore.Desc).LimitToLast(1)
+	query := client.Collection(config.ProfileCollectionName).OrderBy("generated_at", firestore.Desc).Limit(1)
 	fetchedProfiles, err := query.Documents(ctx).GetAll()
 	if err != nil {
 		return 0, err
@@ -135,11 +141,11 @@ func getUpdatedCount(ctx context.Context, client *firestore.Client, config Confi
 		return 10000000, nil // No profile we want to regenerate anyway.
 	}
 	latestProfile := fetchedProfiles[0].Data()
-	last_profile_timestamp, ok := latestProfile["generated_at"].(int64)
+	last_profile_timestamp, ok := latestProfile["generated_at"].(time.Time)
 	if !ok {
 		return 0, errors.New("Parse error when retrieving last profile time stamp.")
 	}
-	query = client.Collection(config.PapersCollectionName).Where("timestamp", ">", last_profile_timestamp)
+	query = client.Collection(config.PapersCollectionName).Where("last_vote_at", ">", last_profile_timestamp)
 	aggregationQuery := query.NewAggregationQuery().WithCount("all")
 	results, err := aggregationQuery.Get(ctx)
 	if err != nil {
@@ -178,12 +184,12 @@ func queueProfileGenerationTask(ctx context.Context, client *cloudtasks.Client, 
 }
 
 func validUpdate(u Update) bool {
-	if u.MessageReactionCountUpdated != nil {
+	if u.MessageReactionCount != nil {
 		log.Println("Message reaction count updated.")
 		return true
 	}
 
-	if u.MessagReactionUpdated != nil {
+	if u.MessageReactionUpdated != nil {
 		log.Println("Message reaction updated.")
 		return true
 	}
@@ -191,7 +197,23 @@ func validUpdate(u Update) bool {
 	return false
 }
 
+func validSecret(r *http.Request, expected string) bool {
+	got := r.Header.Get(telegramSecretHeader)
+	return subtle.ConstantTimeCompare([]byte(got), []byte(expected)) == 1
+}
+
 func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !validSecret(r, s.cfg.WebhookSecret) {
+		log.Println("Rejected request: invalid or missing Telegram secret token header.")
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	ctx := r.Context()
 	var u Update
 	err := json.NewDecoder(r.Body).Decode(&u)
@@ -203,8 +225,8 @@ func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid Webhook Type", http.StatusBadRequest)
 		return
 	}
-	score, id := calculateScore(*u.MessageReactionCountUpdated)
-	timestamp := time.Unix(u.MessageReactionCountUpdated.Date, 0)
+	score, id := calculateScore(*u.MessageReactionCount)
+	timestamp := time.Unix(u.MessageReactionCount.Date, 0)
 	if err := updateScore(ctx, s.firestore, *s.cfg, id, score, timestamp); err != nil {
 		log.Printf("failed to update score: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)

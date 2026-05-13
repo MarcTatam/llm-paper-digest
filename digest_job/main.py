@@ -35,8 +35,8 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-CLAUDE_MODEL_RANKING = os.getenv("CLAUDE_MODEL_RANKING", "claude-sonnet-4-5-20250514")
-CLAUDE_MODEL_SUMMARY = os.getenv("CLAUDE_MODEL_SUMMARY", "claude-sonnet-4-5-20250514")
+CLAUDE_MODEL_RANKING = os.getenv("CLAUDE_MODEL_RANKING", "claude-sonnet-4-5")
+CLAUDE_MODEL_SUMMARY = os.getenv("CLAUDE_MODEL_SUMMARY", "claude-sonnet-4-5")
 
 PAPERS_COLLECTION = os.getenv("PAPERS_COLLECTION")
 PROFILES_COLLECTION = os.getenv("PROFILES_COLLECTION")
@@ -154,7 +154,7 @@ def fetch_latest_profile() -> Profile | None:
     client = firestore.Client()
     query = (
         client.collection(PROFILES_COLLECTION)
-        .order_by("created_at", direction=firestore.Query.DESCENDING)
+        .order_by("generated_at", direction=firestore.Query.DESCENDING)
         .limit(1)
     )
 
@@ -474,8 +474,8 @@ def main():
     paper_summaries = [(paper, process_paper(paper)) for paper in top_papers]
     messages = format_telegram_digest(paper_summaries)
     message_ids = asyncio.run(send_digest(messages))
-    for i in range(TOP_N_PAPERS):
-        save_paper_to_firestore(top_papers[i], message_ids[i])
+    for paper, msg_id in zip(top_papers, message_ids):
+        save_paper_to_firestore(paper, msg_id)
     logger.info(f"Digest sent: {message_ids}")
 
 if __name__ == "__main__":

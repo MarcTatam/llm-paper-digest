@@ -32,7 +32,7 @@ resource "google_cloud_run_v2_service" "webhook_service" {
 
       env {
         name = "PROFILE_COLLECTION_NAME"
-        value = var.papers_collection
+        value = var.profiles_collection
       }
 
       env {
@@ -48,6 +48,16 @@ resource "google_cloud_run_v2_service" "webhook_service" {
       env {
         name = "LOCATION"
         value = google_cloud_tasks_queue.profile_regen.location
+      }
+
+      env {
+        name = "WEBHOOK_SECRET"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.telegram_webhook_secret.secret_id
+            version = "latest"
+          }
+        }
       }
     }
   }
