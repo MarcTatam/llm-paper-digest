@@ -133,13 +133,17 @@ def fetch_interacted_papers(
 ) -> list[InteractedPaper]:
     """Fetch papers with any vote activity, optionally filtering by last_vote_at > since."""
     query = db.collection(PAPERS_COLLECTION).where("score", "!=", 0)
+    if since is not None:
+        query = query.where("last_vote_at", ">", since)
+    else:
+        query = query.where("score", "!=", 0)
     docs = query.stream()
 
     papers: list[InteractedPaper] = []
     for doc in docs:
         data = doc.to_dict()
         last_vote_at = data["last_vote_at"]
-        if since is not None and last_vote_at >= since:
+        if since is not None and last_vote_at <= since:
             continue
         try:
             papers.append(InteractedPaper(

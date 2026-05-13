@@ -88,7 +88,7 @@ func mustGetEnv(key string) string {
 }
 
 func loadConfig() *Config {
-	vote_thershold, err := strconv.Atoi(mustGetEnv("VOTE_THRESHOLD"))
+	vote_threshold, err := strconv.Atoi(mustGetEnv("VOTE_THRESHOLD"))
 	if err != nil {
 		panic("Required environment variable VOTE_THRESHOLD is not of the correct type.")
 	}
@@ -100,7 +100,7 @@ func loadConfig() *Config {
 		ProfileCollectionName: mustGetEnv("PROFILE_COLLECTION_NAME"),
 		GenerationURL:         mustGetEnv("GENERATION_URL"),
 		WebhookSecret:         mustGetEnv("WEBHOOK_SECRET"),
-		VoteThreshold:         vote_thershold,
+		VoteThreshold:         vote_threshold,
 	}
 }
 
