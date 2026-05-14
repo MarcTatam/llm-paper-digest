@@ -1,0 +1,36 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/arxiv-digest:latest'
+      - '.'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '--all-tags'
+      - 'gcr.io/$PROJECT_ID/arxiv-digest'
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'jobs'
+      - 'update'
+      - 'arxiv-digest'
+      - '--image=gcr.io/$PROJECT_ID/arxiv-digest:latest'
+      - '--region=$_REGION'
+      - '--task-timeout=600'
+      - '--memory=512Mi'
+      - '--max-retries=0'
+      - '--project=$PROJECT_ID'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+substitutions:
+  _REGION: europe-west2
+
+images:
+  - 'gcr.io/$PROJECT_ID/arxiv-digest'

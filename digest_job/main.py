@@ -8,6 +8,7 @@ Deployed on Cloud Run, triggered daily by Cloud Scheduler.
 """
 
 import base64
+import io
 import os
 import logging
 import asyncio
@@ -18,7 +19,10 @@ import httpx
 import xmltodict
 import anthropic
 import requests
+from google.cloud import firestore
 from pydantic import BaseModel, Field, ConfigDict
+from pypdf import PdfReader, PdfWriter
+
 
 # --- Configuration ---
 ARXIV_CATEGORIES = os.getenv(
@@ -31,8 +35,11 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-CLAUDE_MODEL_RANKING = os.getenv("CLAUDE_MODEL_RANKING", "claude-sonnet-4-5-20250514")
-CLAUDE_MODEL_SUMMARY = os.getenv("CLAUDE_MODEL_SUMMARY", "claude-sonnet-4-5-20250514")
+CLAUDE_MODEL_RANKING = os.getenv("CLAUDE_MODEL_RANKING", "claude-sonnet-4-5")
+CLAUDE_MODEL_SUMMARY = os.getenv("CLAUDE_MODEL_SUMMARY", "claude-sonnet-4-5")
+
+PAPERS_COLLECTION = os.getenv("PAPERS_COLLECTION")
+PROFILES_COLLECTION = os.getenv("PROFILES_COLLECTION")
 
 USER_INTERESTS = os.getenv("USER_INTERESTS", """
 - LLM-powered tools and applications (RAG, agents, tool use)
@@ -49,6 +56,7 @@ class Paper(BaseModel):
     arxiv_id:str
     title:str
     abstract:str
+    categories: list[str] = []
 
     def get_pdf_url(self):
         return f"https://arxiv.org/pdf/{self.arxiv_id}.pdf"
@@ -68,6 +76,13 @@ class PaperSummary(BaseModel):
     impact:str = Field(description="1 sentence on the practical impact — what changes if this works at scale?")
 
     model_config = ConfigDict(extra='forbid')
+
+class Profile(BaseModel):
+    liked_themes: list[str]
+    disliked_themes: list[str]
+    prose_summary: str
+
+    model_config = ConfigDict(extra="forbid")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -108,6 +123,11 @@ def fetch_arxiv_papers(
             authors_raw = [authors_raw]
         authors = [a.get("name", "") for a in authors_raw]
 
+        categories_raw = entry.get("category", [])
+        if isinstance(categories_raw, dict):
+            categories_raw = [categories_raw]
+        categories = [c.get("@term", "") for c in categories_raw if c.get("@term")]
+
         arxiv_id = entry.get("id", "").split("/abs/")[-1]
         abstract:str = entry.get("summary", "").replace("\n", " ").strip()
         if not abstract:
@@ -118,21 +138,57 @@ def fetch_arxiv_papers(
             arxiv_id=arxiv_id,
             authors=authors,
             title=title,
-            abstract=abstract
+            abstract=abstract,
+            categories=categories
         ))
 
     logger.info(f"Fetched {len(papers)} papers from arXiv")
     return papers
 
+def fetch_latest_profile() -> Profile | None:
+    """Fetch the most recently created profile from Firestore.
+
+    Returns None if no profiles exist in the collection.
+    """
+
+    client = firestore.Client()
+    query = (
+        client.collection(PROFILES_COLLECTION)
+        .order_by("generated_at", direction=firestore.Query.DESCENDING)
+        .limit(1)
+    )
+
+    docs = list(query.stream())
+    if not docs:
+        return None
+
+    return Profile.model_validate(docs[0].to_dict())
+
 def rank_papers_with_claude(
     papers: list[Paper],
     top_n: int = 5,
-) -> dict:
+) -> list[Paper]:
     """Use Claude to rank papers by relevance and generate a digest."""
     if not papers:
-        return {"papers": [], "digest": "No papers found today."}
+        return []
 
-    # Build paper summaries for the prompt
+    profile = fetch_latest_profile()
+    if profile is None:
+        logger.warning("No profile found in Firestore; falling back to static interests")
+        interests_block = USER_INTERESTS
+    else:
+        liked = "\n".join(f"- {theme}" for theme in profile.liked_themes)
+        disliked = (
+            "\n".join(f"- {theme}" for theme in profile.disliked_themes)
+            if profile.disliked_themes
+            else "(none)"
+        )
+        interests_block = (
+            f"{profile.prose_summary}\n\n"
+            f"Themes the user is drawn to:\n{liked}\n\n"
+            f"Themes the user consistently passes on:\n{disliked}"
+        )
+
     paper_list = ""
     for i, p in enumerate(papers):
         authors_str = ", ".join(p.authors[:3])
@@ -148,7 +204,7 @@ def rank_papers_with_claude(
     prompt = f"""You are an AI research digest assistant. Your job is to identify the most interesting and relevant papers for a software engineer working in AI/ML consulting.
 
 Here are the user's interests:
-{USER_INTERESTS}
+{interests_block}
 
 Here are today's new arXiv papers:
 {paper_list}
@@ -156,13 +212,14 @@ Here are today's new arXiv papers:
 Please:
 1. Select the top {top_n} most relevant papers based on the user's interests by using their index.
 2. Do not select any papers that are purely theoretical or are just benchmarks.
+3. Prefer papers aligned with the liked themes; avoid papers that match the disliked themes unless they are clearly exceptional.
 """
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     logger.info("Sending papers to Claude for ranking...")
     output_config = anthropic.types.OutputConfigParam(
-        format = anthropic.types.JSONOutputFormatParam(
+        format=anthropic.types.JSONOutputFormatParam(
             schema=PaperSelection.model_json_schema(),
             type='json_schema'
         )
@@ -184,49 +241,96 @@ Please:
 
     return selected_papers
 
-def process_paper(paper:Paper)->PaperSummary:
-    time.sleep(65)
-    reponse = requests.get(paper.get_pdf_url())
-    paper = base64.b64encode(reponse.content).decode("utf-8")
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
-    logger.info("Sending paper to Claude for summarisation...")
+def _truncate_pdf(pdf_bytes: bytes, head_pages: int = 20, tail_pages: int = 50) -> bytes:
+    """Return a new PDF containing only the first `head_pages` and last `tail_pages`.
+ 
+    If the PDF is small enough that head + tail would overlap or cover the whole
+    document, the original bytes are returned unchanged.
+    """
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    total = len(reader.pages)
+ 
+    if total <= head_pages + tail_pages:
+        return pdf_bytes
+ 
+    writer = PdfWriter()
+    for i in range(head_pages):
+        writer.add_page(reader.pages[i])
+    for i in range(total - tail_pages, total):
+        writer.add_page(reader.pages[i])
+ 
+    buf = io.BytesIO()
+    writer.write(buf)
+    logger.info(
+        "Truncated PDF from %d pages to %d (first %d + last %d).",
+        total, head_pages + tail_pages, head_pages, tail_pages,
+    )
+    return buf.getvalue()
+ 
+ 
+def _build_message(client: anthropic.Anthropic, pdf_b64: str) -> anthropic.types.Message:
     output_config = anthropic.types.OutputConfigParam(
-        format = anthropic.types.JSONOutputFormatParam(
+        format=anthropic.types.JSONOutputFormatParam(
             schema=PaperSummary.model_json_schema(),
-            type='json_schema'
+            type="json_schema",
         )
     )
-    message = client.messages.create(
+    return client.messages.create(
         model=CLAUDE_MODEL_SUMMARY,
         max_tokens=2000,
-        messages=[{"role": "user", "content": [{
-            "type" : "document",
-            "source" : {
-                "type" : "base64",
-                "media_type" : "application/pdf",
-                "data" : paper
-            }
-        },
-        {
-            "type" : "text",
-            "text" : """Summarise this paper for a morning digest read by an AI engineer. Be concise — each field should be a few sentences at most.
-
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": pdf_b64,
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": """Summarise this paper for a morning digest read by an AI engineer. Be concise — each field should be a few sentences at most.
+ 
 Rules:
 - No filler phrases like "This paper presents" or "The authors propose" — just say what it does.
 - Assume the reader understands transformers, RAG, RL, and standard ML concepts.
 - Focus on what's novel, not background.
 - For the prototype, be specific and actionable, not vague.
 - For impact, think: what changes in production AI systems if this works?
-- Total response should be under 250 words."""
-        }]}],
-        output_config=output_config
+- Total response should be under 250 words.""",
+                },
+            ],
+        }],
+        output_config=output_config,
     )
-    logger.info('Recevieved Claude Summary.')
-    summary_response = PaperSummary.model_validate_json(message.content[0].text)
-    return summary_response
+ 
+ 
+def process_paper(paper: Paper) -> PaperSummary:
+    time.sleep(65)
+    response = requests.get(paper.get_pdf_url())
+    pdf_bytes = response.content
+    pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+ 
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+ 
+    logger.info("Sending paper to Claude for summarisation...")
+    try:
+        message = _build_message(client, pdf_b64)
+    except anthropic.BadRequestError as e:
+        # Only retry on the specific page-limit error; re-raise anything else.
+        if "100 PDF pages" not in str(e):
+            raise
+        logger.warning("Paper exceeded 100 pages; truncating to first 20 + last 50.")
+        truncated = _truncate_pdf(pdf_bytes, head_pages=20, tail_pages=50)
+        pdf_b64 = base64.b64encode(truncated).decode("utf-8")
+        message = _build_message(client, pdf_b64)
+ 
+    logger.info("Received Claude summary.")
+    return PaperSummary.model_validate_json(message.content[0].text)
 
-async def send_telegram_message(text: str, parse_mode: str = "Markdown") -> bool:
+async def send_telegram_message(text: str, parse_mode: str = "Markdown") -> int | None:
     """Send a single message via Telegram bot, splitting if over 4096 chars."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         logger.error("Telegram credentials not configured")
@@ -249,6 +353,7 @@ async def send_telegram_message(text: str, parse_mode: str = "Markdown") -> bool
     else:
         chunks = [text]
 
+    first_message_id: int | None = None
     async with httpx.AsyncClient(timeout=15) as client:
         for chunk in chunks:
             payload = {
@@ -265,25 +370,55 @@ async def send_telegram_message(text: str, parse_mode: str = "Markdown") -> bool
                 payload["parse_mode"] = ""
                 resp = await client.post(url, json=payload)
                 resp.raise_for_status()
+            if first_message_id is None:
+                first_message_id = resp.json().get("result", {}).get("message_id")
             await asyncio.sleep(0.5)
 
-    return True
+    return first_message_id
 
 
-async def send_digest(messages: list[str]) -> bool:
+async def send_digest(messages: list[str]) -> list[int | None]:
     """Send a list of Telegram messages sequentially."""
+    message_ids: list[int | None] = []
     for i, message in enumerate(messages):
-        success = await send_telegram_message(message)
-        if not success:
+        msg_id = await send_telegram_message(message)
+        if msg_id is None:
             logger.error(f"Failed to send message {i + 1}/{len(messages)}")
-            return False
+        # First message is header, we don't care about it's ID.
+        if i > 0:
+            message_ids.append(msg_id)
     logger.info(f"Sent digest via Telegram ({len(messages)} message(s))")
-    return True
+    return message_ids
+
+def save_paper_to_firestore(
+    paper: Paper,
+    telegram_message_id: int,
+    db: firestore.Client | None = None,
+) -> None:
+    """Persist a sent paper to Firestore for later feedback tracking.
+
+    Uses arxiv_id as the document ID so writes are idempotent.
+    """
+    if db is None:
+        db = firestore.Client()
+
+    doc_ref = db.collection(PAPERS_COLLECTION).document(str(telegram_message_id))
+    doc_ref.set({
+        "telegram_message_id": telegram_message_id,
+        "arxiv_id": paper.arxiv_id,
+        "title": paper.title,
+        "abstract": paper.abstract,
+        "categories": paper.categories,
+        "sent_at": firestore.SERVER_TIMESTAMP,
+        "score": 0,
+        "last_vote_at": None,
+    })
+    logger.info(f"Saved paper {paper.arxiv_id} to Firestore (msg_id={telegram_message_id})")
 
 
 def format_telegram_digest(paper_summaries: list[tuple[Paper, PaperSummary]]) -> list[str]:
     """Format paper summaries into separate Telegram messages — one header + one per paper."""
-    date_str = datetime.utcnow().strftime("%A, %d %B %Y")
+    date_str = datetime.now().strftime("%A, %d %B %Y")
     header = (
         f"📚 *arXiv Daily Digest*\n"
         f"_{date_str}_\n"
@@ -338,8 +473,10 @@ def main():
     top_papers = rank_papers_with_claude(all_papers, TOP_N_PAPERS)
     paper_summaries = [(paper, process_paper(paper)) for paper in top_papers]
     messages = format_telegram_digest(paper_summaries)
-    success = asyncio.run(send_digest(messages))
-    logger.info(f"Digest sent: {success}")
+    message_ids = asyncio.run(send_digest(messages))
+    for paper, msg_id in zip(top_papers, message_ids):
+        save_paper_to_firestore(paper, msg_id)
+    logger.info(f"Digest sent: {message_ids}")
 
 if __name__ == "__main__":
     main()
