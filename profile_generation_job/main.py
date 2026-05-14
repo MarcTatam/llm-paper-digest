@@ -132,7 +132,7 @@ def fetch_interacted_papers(
     since: datetime | None,
 ) -> list[InteractedPaper]:
     """Fetch papers with any vote activity, optionally filtering by last_vote_at > since."""
-    query = db.collection(PAPERS_COLLECTION).where("score", "!=", 0)
+    query = db.collection(PAPERS_COLLECTION)
     if since is not None:
         query = query.where("last_vote_at", ">", since)
     else:
