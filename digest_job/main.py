@@ -82,8 +82,6 @@ class Profile(BaseModel):
     disliked_themes: list[str]
     prose_summary: str
 
-    model_config = ConfigDict(extra="forbid")
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
