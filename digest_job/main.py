@@ -127,10 +127,10 @@ def fetch_arxiv_papers(
         categories = [c.get("@term", "") for c in categories_raw if c.get("@term")]
 
         arxiv_id = entry.get("id", "").split("/abs/")[-1]
-        abstract:str = entry.get("summary", "").replace("\n", " ").strip()
+        abstract: str = (entry.get("summary") or "").replace("\n", " ").strip()
         if not abstract:
             continue
-        title = entry.get("title", "").replace("\n", " ").strip()
+        title = (entry.get("title") or "").replace("\n", " ").strip()
 
         papers.append(Paper(
             arxiv_id=arxiv_id,
