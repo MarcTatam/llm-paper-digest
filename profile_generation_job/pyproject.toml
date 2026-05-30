@@ -9,3 +9,8 @@ dependencies = [
     "google-cloud-firestore>=2.27.0",
     "pydantic>=2.13.3",
 ]
+
+[dependency-groups]
+test = [
+    "pytest>=9.0.3",
+]
