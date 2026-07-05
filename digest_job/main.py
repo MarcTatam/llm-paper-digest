@@ -71,8 +71,8 @@ class PaperSelection(BaseModel):
 
 class PaperSummary(BaseModel):
     summary:str = Field(description="2-3 sentence summary of what this paper does and its key finding. Be direct, no filler.")
-    application:str = Field(description="1-2 sentences on where this could be applied in production AI systems.")
-    prototype:str = Field(description="1-2 sentences describing a quick prototype using these findings. Assume existing RAG/agent infrastructure.")
+    application:str = Field(description="1-2 sentences on where this could be applied in production AI systems, and how a quick prototype could be built assuming basic RAG/agent infrastructure exists.")
+    question:str = Field(description="A single question that this paper answers. E.g. for a paper that describes a new retrieval architecture a question would be 'How do I efficently retrieve knowledge?'")
     impact:str = Field(description="1 sentence on the practical impact — what changes if this works at scale?")
 
     model_config = ConfigDict(extra='forbid')
@@ -435,14 +435,14 @@ def format_telegram_digest(paper_summaries: list[tuple[Paper, PaperSummary]]) ->
             f"*{i}/{len(paper_summaries)}  {_escape_md(paper.title)}*\n"
             f"_{_escape_md(authors_str)}_\n"
             f"\n"
+            f"❓ *Question*\n"
+            f"{_escape_md(summary.question)}\n"
+            f"\n"
             f"📝 *Summary*\n"
             f"{_escape_md(summary.summary)}\n"
             f"\n"
             f"🔧 *Application*\n"
             f"{_escape_md(summary.application)}\n"
-            f"\n"
-            f"⚡ *Quick Prototype*\n"
-            f"{_escape_md(summary.prototype)}\n"
             f"\n"
             f"💥 *Impact*\n"
             f"{_escape_md(summary.impact)}\n"
