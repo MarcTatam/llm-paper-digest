@@ -263,7 +263,7 @@ class TestFormatDigest:
     def test_produces_header_plus_one_per_paper(self):
         summaries = [
             (make_paper(i), PaperSummary(
-                summary="s", application="a", prototype="p", impact="i",
+                summary="s", application="a", question="q", impact="i",
             ))
             for i in range(3)
         ]
@@ -276,7 +276,7 @@ class TestFormatDigest:
     def test_paper_message_contains_links(self):
         paper = make_paper(7)
         summaries = [(paper, PaperSummary(
-            summary="s", application="a", prototype="p", impact="i",
+            summary="s", application="a", question="q", impact="i",
         ))]
         messages = format_telegram_digest(summaries)
         body = messages[1]
@@ -286,7 +286,7 @@ class TestFormatDigest:
     def test_author_truncation_et_al(self):
         paper = make_paper(1, n_authors=5)
         summaries = [(paper, PaperSummary(
-            summary="s", application="a", prototype="p", impact="i",
+            summary="s", application="a", question="q", impact="i",
         ))]
         messages = format_telegram_digest(summaries)
         assert "et al." in messages[1]
@@ -294,7 +294,7 @@ class TestFormatDigest:
     def test_no_et_al_for_three_authors(self):
         paper = make_paper(1, n_authors=3)
         summaries = [(paper, PaperSummary(
-            summary="s", application="a", prototype="p", impact="i",
+            summary="s", application="a", question="q", impact="i",
         ))]
         messages = format_telegram_digest(summaries)
         assert "et al." not in messages[1]
@@ -521,7 +521,7 @@ class FakeBadRequest(anthropic.BadRequestError):
 class TestProcessPaper:
     def test_happy_path_no_truncation(self):
         paper = make_paper(1)
-        summary = PaperSummary(summary="s", application="a", prototype="p", impact="i")
+        summary = PaperSummary(summary="s", application="a", question="q", impact="i")
 
         pdf_resp = MagicMock()
         pdf_resp.content = make_pdf(3)
@@ -542,7 +542,7 @@ class TestProcessPaper:
 
     def test_retries_with_truncation_on_page_limit(self):
         paper = make_paper(2)
-        summary = PaperSummary(summary="ok", application="a", prototype="p", impact="i")
+        summary = PaperSummary(summary="ok", application="a", question="q", impact="i")
 
         pdf_resp = MagicMock()
         pdf_resp.content = make_pdf(120)  # large enough that truncation changes it
