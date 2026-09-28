@@ -70,10 +70,12 @@ class PaperSelection(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
 class PaperSummary(BaseModel):
-    summary:str = Field(description="2-3 sentence summary of what this paper does and its key finding. Be direct, no filler.")
-    application:str = Field(description="1-2 sentences on where this could be applied in production AI systems, and how a quick prototype could be built assuming basic RAG/agent infrastructure exists.")
-    question:str = Field(description="A single question that this paper answers. E.g. for a paper that describes a new retrieval architecture a question would be 'How do I efficently retrieve knowledge?'")
-    impact:str = Field(description="1 sentence on the practical impact — what changes if this works at scale?")
+    question: str = Field(description="The practical question this paper answers, in plain English, as an engineer would ask it. E.g. 'Can I cut RAG latency without hurting answer quality?'")
+    problem: str = Field(description="1-2 sentences: what the standard approach does badly, concretely, that motivates this paper.")
+    idea: str = Field(description="2-3 sentences: how the method works mechanically, described in terms of standard components (retriever, reranker, reward model, etc.). Explain any paper-specific term the first time it appears.")
+    result: str = Field(description="1-2 sentences: headline result with numbers, what it was compared against, and on which task/benchmark.")
+    try_it: str = Field(description="2-3 concrete steps to prototype this on an existing RAG/agent stack, naming which component you'd change or add.")
+    caveat: str = Field(description="1 sentence: the biggest limitation or reason for scepticism (narrow eval, needs fine-tuning, cost, etc.).")
 
     model_config = ConfigDict(extra='forbid')
 
@@ -289,15 +291,15 @@ def _build_message(client: anthropic.Anthropic, pdf_b64: str) -> anthropic.types
                 },
                 {
                     "type": "text",
-                    "text": """Summarise this paper for a morning digest read by an AI engineer. Be concise — each field should be a few sentences at most.
- 
-Rules:
-- No filler phrases like "This paper presents" or "The authors propose" — just say what it does.
-- Assume the reader understands transformers, RAG, RL, and standard ML concepts.
-- Focus on what's novel, not background.
-- For the prototype, be specific and actionable, not vague.
-- For impact, think: what changes in production AI systems if this works?
-- Total response should be under 250 words.""",
+                    "text": """You're writing one entry in a morning digest for an AI engineer who reads it on their phone and has NOT read the paper. They should understand what the paper did, and whether to care, in under a minute.
+
+Clarity first, brevity second:
+- Short, plain sentences. One idea per sentence.
+- Never use a name or term the paper coined (method names, acronyms, custom jargon) without saying what it is in ordinary terms. Assume the reader knows standard ML/LLM concepts (transformers, RAG, fine-tuning, RLHF, KV cache) and nothing paper-specific.
+- Explain the mechanism, not just the claim: "they do X by doing Y", not "they propose a framework for X".
+- Be concrete: numbers, baselines, benchmarks, component names. If the paper is vague or the gains are small, say so.
+- No filler or hype ("This paper presents", "novel", "leverages", "state-of-the-art").
+- Aim for 200-300 words total..""",
                 },
             ],
         }],
@@ -435,17 +437,22 @@ def format_telegram_digest(paper_summaries: list[tuple[Paper, PaperSummary]]) ->
             f"*{i}/{len(paper_summaries)}  {_escape_md(paper.title)}*\n"
             f"_{_escape_md(authors_str)}_\n"
             f"\n"
-            f"❓ *Question*\n"
-            f"{_escape_md(summary.question)}\n"
+            f"❓ *{_escape_md(summary.question)}*\n"
             f"\n"
-            f"📝 *Summary*\n"
-            f"{_escape_md(summary.summary)}\n"
+            f"🧱 *Problem*\n"
+            f"{_escape_md(summary.problem)}\n"
             f"\n"
-            f"🔧 *Application*\n"
-            f"{_escape_md(summary.application)}\n"
+            f"💡 *Idea*\n"
+            f"{_escape_md(summary.idea)}\n"
             f"\n"
-            f"💥 *Impact*\n"
-            f"{_escape_md(summary.impact)}\n"
+            f"📊 *Result*\n"
+            f"{_escape_md(summary.result)}\n"
+            f"\n"
+            f"🔧 *Try it*\n"
+            f"{_escape_md(summary.try_it)}\n"
+            f"\n"
+            f"⚠️ *Caveat*\n"
+            f"{_escape_md(summary.caveat)}\n"
             f"\n"
             f"[Read Paper]({paper.get_abs_url()}) · [PDF]({paper.get_pdf_url()})"
         )
